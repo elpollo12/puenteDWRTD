@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 
 import socket
 import struct
@@ -74,7 +74,7 @@ except Exception:
 
 
 def ensure_pymongo():
-    """Instala pymongo via pip si no esta disponible. Uso diferido para no bloquear startup.
+    """Instala pymongo via pip si no esta disponible. Compatible Python 2.7 y 3.x.
     Retorna (ok, msg)."""
     global pymongo
     if pymongo is not None:
@@ -83,11 +83,24 @@ def ensure_pymongo():
         import subprocess
         # CREATE_NO_WINDOW en Windows para no mostrar consola
         flags = 0x08000000 if os.name == 'nt' else 0
-        proc = subprocess.run(
+        popen_kwargs = {
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.PIPE,
+        }
+        if os.name == 'nt':
+            popen_kwargs['creationflags'] = flags
+        proc = subprocess.Popen(
             [sys.executable, '-m', 'pip', 'install', '--user', '--quiet', 'pymongo'],
-            capture_output=True, text=True, creationflags=flags, timeout=120)
-        if proc.returncode != 0:
-            return (False, 'pip install fallo: {}'.format((proc.stderr or proc.stdout).strip()[:300]))
+            **popen_kwargs)
+        stdout, stderr = proc.communicate()
+        rc = proc.returncode
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode('utf-8', 'replace')
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode('utf-8', 'replace')
+        if rc != 0:
+            return (False, 'pip install fallo (rc={}): {}'.format(
+                rc, (stderr or stdout).strip()[:300]))
         # Importar ahora que esta instalado
         try:
             import pymongo as _pm
