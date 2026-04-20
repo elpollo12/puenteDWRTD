@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 
 import socket
 import struct
@@ -111,12 +111,43 @@ def ensure_pymongo():
         except Exception as e:
             return -1, '{} excepcion: {}'.format(label, e)
 
+    def _refresh_and_import():
+        """Limpia cache de imports y fuerza reimport de pymongo tras pip install."""
+        global pymongo
+        # 1. Agregar user site-packages al sys.path si no esta
+        try:
+            import site
+            try:
+                user_site = site.getusersitepackages()
+            except Exception:
+                user_site = None
+            if user_site and user_site not in sys.path:
+                sys.path.insert(0, user_site)
+        except Exception:
+            pass
+        # 2. Invalidar cache de finders (Python 3.3+)
+        try:
+            import importlib
+            if hasattr(importlib, 'invalidate_caches'):
+                importlib.invalidate_caches()
+        except Exception:
+            pass
+        # 3. Limpiar sys.modules de entradas previas (negative cache / parcial)
+        for mod_name in list(sys.modules.keys()):
+            if mod_name == 'pymongo' or mod_name.startswith('pymongo.'):
+                try:
+                    del sys.modules[mod_name]
+                except Exception:
+                    pass
+        # 4. Intentar import ahora
+        import pymongo as _pm
+        pymongo = _pm
+
     # Intento 1: pip install normal (quiet)
     rc, out = _try_pip(['--quiet'], 'pip normal')
     if rc == 0:
         try:
-            import pymongo as _pm
-            pymongo = _pm
+            _refresh_and_import()
             return (True, 'pymongo {} instalado'.format(package_spec))
         except Exception as e:
             return (False, 'instalado pero no importa: {}'.format(e))
@@ -127,8 +158,7 @@ def ensure_pymongo():
         'pip trusted-host')
     if rc2 == 0:
         try:
-            import pymongo as _pm
-            pymongo = _pm
+            _refresh_and_import()
             return (True, 'pymongo {} instalado (via trusted-host)'.format(package_spec))
         except Exception as e:
             return (False, 'instalado pero no importa: {}'.format(e))
