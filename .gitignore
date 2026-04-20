@@ -1,0 +1,24 @@
+# Datos locales y backlog (cada instalacion tiene el suyo)
+tcp_4guard.db
+tcp_4guard.db-journal
+tcp_4guard.db-wal
+tcp_4guard.db-shm
+
+# Config local con credenciales
+tcp_4guard.ini
+
+# Backup del OTA
+*.bak
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
