@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 
 import socket
 import struct
@@ -2797,6 +2797,11 @@ class BridgeGUI(object):
             self.root.after(500, self._refresh_autostart_status)
         except Exception:
             pass
+        # Auto-instalar pymongo en background si falta (para no bloquear arranque)
+        try:
+            self.root.after(300, self._auto_install_pymongo_if_missing)
+        except Exception:
+            pass
         # Auto-iniciar el bridge si esta habilitado en la config
         try:
             if self.auto_start_var.get():
@@ -3108,6 +3113,24 @@ class BridgeGUI(object):
                     w.grid()
             except Exception:
                 pass
+
+    def _auto_install_pymongo_if_missing(self):
+        """Si pymongo no esta instalado, lo instala en background al abrir la GUI."""
+        if pymongo is not None:
+            return  # Ya esta, nada que hacer
+        def _worker():
+            try:
+                self._append_log('[ExtComments] pymongo no detectado, instalando automaticamente...\n')
+            except Exception:
+                pass
+            ok, msg = ensure_pymongo()
+            try:
+                self._append_log('[ExtComments] ' + msg + '\n')
+            except Exception:
+                pass
+        t = threading.Thread(target=_worker)
+        t.daemon = True
+        t.start()
 
     def _auto_start_if_needed(self):
         """Inicia el bridge automaticamente si esta habilitado y no esta ya corriendo."""
