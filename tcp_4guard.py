@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 
 import socket
 import struct
@@ -71,6 +71,32 @@ try:
     import pymongo
 except Exception:
     pymongo = None
+
+
+def ensure_pymongo():
+    """Instala pymongo via pip si no esta disponible. Uso diferido para no bloquear startup.
+    Retorna (ok, msg)."""
+    global pymongo
+    if pymongo is not None:
+        return (True, 'pymongo ya disponible')
+    try:
+        import subprocess
+        # CREATE_NO_WINDOW en Windows para no mostrar consola
+        flags = 0x08000000 if os.name == 'nt' else 0
+        proc = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--user', '--quiet', 'pymongo'],
+            capture_output=True, text=True, creationflags=flags, timeout=120)
+        if proc.returncode != 0:
+            return (False, 'pip install fallo: {}'.format((proc.stderr or proc.stdout).strip()[:300]))
+        # Importar ahora que esta instalado
+        try:
+            import pymongo as _pm
+            pymongo = _pm
+            return (True, 'pymongo instalado correctamente')
+        except Exception as e:
+            return (False, 'pymongo instalado pero no se puede importar: {}'.format(e))
+    except Exception as e:
+        return (False, 'Error instalando pymongo: {}'.format(e))
 
 
 # ========== Autostart Windows (HKCU Registry Run key, sin admin) ==========
@@ -1656,8 +1682,12 @@ class TCPBridge:
         if not self.ext_comments_enabled:
             return
         if pymongo is None:
-            cli_print('[ExtComments] ERROR: pymongo no instalado. pip install pymongo')
-            return
+            cli_print('[ExtComments] pymongo no disponible, intentando instalar automaticamente...')
+            ok, msg = ensure_pymongo()
+            cli_print('[ExtComments] ' + msg)
+            if not ok:
+                cli_print('[ExtComments] Instale manualmente: pip install pymongo')
+                return
         cfg = self.ext_comments_cfg
         mongo_cfg = {
             'host': cfg.get('host', 'localhost'),
@@ -2911,7 +2941,10 @@ class BridgeGUI(object):
         self._ec_backfill_entry.grid(row=9, column=1, padx=4, sticky='w')
         self._ec_test_btn = tk.Button(tab_ec, text='Probar conexion Mongo',
                                        command=self._on_ec_test)
-        self._ec_test_btn.grid(row=9, column=2, columnspan=2, padx=4, pady=(8, 0), sticky='w')
+        self._ec_test_btn.grid(row=9, column=2, padx=4, pady=(8, 0), sticky='w')
+        self._ec_install_btn = tk.Button(tab_ec, text='Instalar pymongo',
+                                          command=self._on_ec_install_pymongo)
+        self._ec_install_btn.grid(row=9, column=3, padx=4, pady=(8, 0), sticky='w')
 
         self._ec_widgets = [self._ec_host_entry, self._ec_port_entry,
                             self._ec_user_entry, self._ec_pass_entry,
@@ -3049,6 +3082,16 @@ class BridgeGUI(object):
                 w.configure(state=state)
             except Exception:
                 pass
+
+    def _on_ec_install_pymongo(self):
+        """Instala pymongo en un hilo separado para no bloquear la GUI."""
+        def _worker():
+            self._append_log('[ExtComments] Instalando pymongo (pip install --user)...\n')
+            ok, msg = ensure_pymongo()
+            self._append_log('[ExtComments] ' + msg + '\n')
+        t = threading.Thread(target=_worker)
+        t.daemon = True
+        t.start()
 
     def _on_ec_test(self):
         """Prueba la conexion a Mongo usando los valores actuales del formulario."""
