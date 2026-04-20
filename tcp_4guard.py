@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.7.0'
+VERSION = '1.7.1'
 
 import socket
 import struct
@@ -1144,9 +1144,12 @@ class ExternalCommentsPoller(object):
         authdb = cfg.get('authdb', 'admin')
         db_name = self._resolve_db_name()
         if user:
-            import urllib.parse as up
-            user_enc = up.quote_plus(user)
-            pass_enc = up.quote_plus(password or '')
+            try:
+                from urllib.parse import quote_plus as _quote_plus  # Python 3
+            except ImportError:
+                from urllib import quote_plus as _quote_plus  # Python 2
+            user_enc = _quote_plus(user)
+            pass_enc = _quote_plus(password or '')
             uri = 'mongodb://{}:{}@{}:{}/{}?authSource={}'.format(
                 user_enc, pass_enc, host, port, db_name, authdb)
         else:
