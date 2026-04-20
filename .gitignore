@@ -22,3 +22,6 @@ __pycache__/
 *.swp
 Thumbs.db
 .DS_Store
+
+# Claude Code local metadata
+.claude/
