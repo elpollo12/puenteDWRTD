@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 
 import socket
 import struct
@@ -3115,9 +3115,16 @@ class BridgeGUI(object):
                 pass
 
     def _auto_install_pymongo_if_missing(self):
-        """Si pymongo no esta instalado, lo instala en background al abrir la GUI."""
+        """Si pymongo no esta instalado, lo instala en background al abrir la GUI.
+        Tras instalar exitosamente, arranca la prueba de conexion Mongo."""
         if pymongo is not None:
-            return  # Ya esta, nada que hacer
+            # Ya esta: si ext_comments esta habilitado, hacer test directamente
+            if self.ec_enabled_var.get():
+                try:
+                    self.root.after(500, self._on_ec_test)
+                except Exception:
+                    pass
+            return
         def _worker():
             try:
                 self._append_log('[ExtComments] pymongo no detectado, instalando automaticamente...\n')
@@ -3128,6 +3135,21 @@ class BridgeGUI(object):
                 self._append_log('[ExtComments] ' + msg + '\n')
             except Exception:
                 pass
+            if ok:
+                # Tras instalacion exitosa, lanzar prueba de conexion Mongo
+                try:
+                    self._append_log('[ExtComments] Iniciando prueba de conexion Mongo...\n')
+                except Exception:
+                    pass
+                try:
+                    # Ejecutar el test en el hilo principal de Tk
+                    self.root.after(0, self._on_ec_test)
+                except Exception:
+                    # Fallback: ejecutar directo (funciona porque _on_ec_test no toca widgets criticos)
+                    try:
+                        self._on_ec_test()
+                    except Exception:
+                        pass
         t = threading.Thread(target=_worker)
         t.daemon = True
         t.start()
