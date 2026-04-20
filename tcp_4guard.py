@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 
 import socket
 import struct
@@ -75,41 +75,67 @@ except Exception:
 
 def ensure_pymongo():
     """Instala pymongo via pip si no esta disponible. Compatible Python 2.7 y 3.x.
+    En Python 2.7 usa pymongo==3.12.3 (ultima version con soporte Py2).
     Retorna (ok, msg)."""
     global pymongo
     if pymongo is not None:
         return (True, 'pymongo ya disponible')
-    try:
+
+    # Seleccionar version compatible segun Python
+    if sys.version_info[0] < 3:
+        # Python 2.7: ultima version compatible de pymongo
+        package_spec = 'pymongo==3.12.3'
+    else:
+        # Python 3.x: cualquier version moderna
+        package_spec = 'pymongo'
+
+    def _try_pip(args_extra, label):
+        """Ejecuta pip install con args_extra adicionales. Retorna (rc, out)."""
         import subprocess
-        # CREATE_NO_WINDOW en Windows para no mostrar consola
-        flags = 0x08000000 if os.name == 'nt' else 0
         popen_kwargs = {
             'stdout': subprocess.PIPE,
             'stderr': subprocess.PIPE,
         }
         if os.name == 'nt':
-            popen_kwargs['creationflags'] = flags
-        proc = subprocess.Popen(
-            [sys.executable, '-m', 'pip', 'install', '--user', '--quiet', 'pymongo'],
-            **popen_kwargs)
-        stdout, stderr = proc.communicate()
-        rc = proc.returncode
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode('utf-8', 'replace')
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode('utf-8', 'replace')
-        if rc != 0:
-            return (False, 'pip install fallo (rc={}): {}'.format(
-                rc, (stderr or stdout).strip()[:300]))
-        # Importar ahora que esta instalado
+            popen_kwargs['creationflags'] = 0x08000000
+        cmd = [sys.executable, '-m', 'pip', 'install', '--user'] + list(args_extra) + [package_spec]
+        try:
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+            stdout, stderr = proc.communicate()
+            rc = proc.returncode
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode('utf-8', 'replace')
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode('utf-8', 'replace')
+            return rc, '{} {}'.format(stdout or '', stderr or '').strip()
+        except Exception as e:
+            return -1, '{} excepcion: {}'.format(label, e)
+
+    # Intento 1: pip install normal (quiet)
+    rc, out = _try_pip(['--quiet'], 'pip normal')
+    if rc == 0:
         try:
             import pymongo as _pm
             pymongo = _pm
-            return (True, 'pymongo instalado correctamente')
+            return (True, 'pymongo {} instalado'.format(package_spec))
         except Exception as e:
-            return (False, 'pymongo instalado pero no se puede importar: {}'.format(e))
-    except Exception as e:
-        return (False, 'Error instalando pymongo: {}'.format(e))
+            return (False, 'instalado pero no importa: {}'.format(e))
+
+    # Intento 2: con trusted-host (para problemas SSL en Python 2.7 viejo)
+    rc2, out2 = _try_pip(
+        ['--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org'],
+        'pip trusted-host')
+    if rc2 == 0:
+        try:
+            import pymongo as _pm
+            pymongo = _pm
+            return (True, 'pymongo {} instalado (via trusted-host)'.format(package_spec))
+        except Exception as e:
+            return (False, 'instalado pero no importa: {}'.format(e))
+
+    # Todo fallo: devolver el ultimo error
+    return (False, 'pip install fallo (rc={}): {}'.format(
+        rc2 if rc2 != 0 else rc, (out2 or out)[:400]))
 
 
 # ========== Autostart Windows (HKCU Registry Run key, sin admin) ==========
