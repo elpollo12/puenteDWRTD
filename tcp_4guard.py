@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.7.1'
+VERSION = '1.8.0'
 
 import socket
 import struct
@@ -773,12 +773,15 @@ class OTAUpdater(object):
         7. Reinicia el proceso
     """
     def __init__(self, broker_ip, broker_port=1883, topic='puente/ota',
-                 username=None, password=None):
+                 username=None, password=None, bridge=None,
+                 test_comment_topic='puente/cmd/test_comment'):
         self.broker_ip = broker_ip
         self.broker_port = int(broker_port)
         self.topic = topic
+        self.test_comment_topic = test_comment_topic
         self.username = username
         self.password = password
+        self.bridge = bridge  # referencia al TCPBridge para dispatch de comandos
         self._client = None
         self._connected = False
         self._lock = threading.Lock()
@@ -894,6 +897,14 @@ class OTAUpdater(object):
                 self._connected = True
             client.subscribe(self.topic, qos=1)
             cli_print('[OTA] Suscrito a {} (version actual={})'.format(self.topic, VERSION))
+            # Suscribir tambien al topic de comandos de prueba (test_comment)
+            try:
+                if self.test_comment_topic and self.bridge is not None:
+                    client.subscribe(self.test_comment_topic, qos=1)
+                    cli_print('[CMD] Suscrito a {} (para inyectar comentarios de prueba)'.format(
+                        self.test_comment_topic))
+            except Exception:
+                pass
         else:
             cli_print('[OTA] Fallo conexion al broker, rc={}'.format(rc))
 
@@ -904,19 +915,50 @@ class OTAUpdater(object):
             cli_print('[OTA] Desconectado (rc={}). Auto-reconnect activo...'.format(rc))
 
     def _on_message(self, client, userdata, msg):
-        """Procesa comando OTA recibido."""
+        """Despacha mensajes MQTT segun el topic: OTA vs comando de prueba."""
         try:
             payload = msg.payload
             if isinstance(payload, bytes):
                 payload = payload.decode('utf-8', 'replace')
+            topic = getattr(msg, 'topic', '')
+            if topic == self.test_comment_topic:
+                # Comando de prueba: inyecta un SPARE500
+                self._handle_test_comment(payload)
+                return
+            # Por defecto, tratar como comando OTA
             cli_print('[OTA] Comando recibido: {}'.format(payload[:300]))
             cmd = json.loads(payload)
-            # Procesar en hilo separado para no bloquear el loop MQTT
             t = threading.Thread(target=self._process_update, args=(cmd,))
             t.daemon = True
             t.start()
         except Exception as e:
-            cli_print('[OTA] Error parseando comando: {}'.format(e))
+            cli_print('[OTA] Error parseando mensaje: {}'.format(e))
+
+    def _handle_test_comment(self, payload):
+        """Procesa un comando de test_comment. Acepta texto plano o JSON {text, author}."""
+        if self.bridge is None:
+            cli_print('[CMD] Sin bridge referenciado, ignorando test_comment')
+            return
+        try:
+            text = None
+            author = 'OTA-test'
+            # Intentar parsear como JSON
+            try:
+                obj = json.loads(payload)
+                if isinstance(obj, dict):
+                    text = obj.get('text') or obj.get('message') or ''
+                    author = obj.get('author') or author
+                else:
+                    text = str(obj)
+            except Exception:
+                text = payload  # texto plano
+            if not text:
+                cli_print('[CMD] test_comment sin texto, ignorando')
+                return
+            cli_print('[CMD] test_comment recibido, inyectando...')
+            self.bridge.inject_test_comment(text, author=author)
+        except Exception as e:
+            cli_print('[CMD] Error manejando test_comment: {}'.format(e))
 
     def _process_update(self, cmd):
         """Ejecuta el flujo completo de actualizacion OTA."""
@@ -1701,7 +1743,8 @@ class TCPBridge:
             broker_port=self.mqtt_broker_port,
             topic=self.ota_topic,
             username=self.mqtt_user,
-            password=self.mqtt_pass)
+            password=self.mqtt_pass,
+            bridge=self)  # para que pueda inyectar comentarios de prueba
         self._ota_updater.start()
 
     def _stop_ota(self):
@@ -1720,6 +1763,24 @@ class TCPBridge:
         """Retorna el Well ID extraido del item 0101 de las tramas WITS, o None."""
         with self._detected_well_id_lock:
             return self._detected_well_id
+
+    def inject_test_comment(self, text, author='OTA-test'):
+        """Inyecta una trama WITS con SPARE500 como si viniera de Mongo.
+        Util para pruebas remotas via MQTT o boton en GUI."""
+        well_id = self.get_detected_well_id() or 'TEST_WELL'
+        ts_iso = iso8601(time.time())
+        safe_text = str(text).replace('\r', ' ').replace('\n', ' ')[:500]
+        safe_author = str(author or 'test').replace('|', '/').replace('\r', ' ').replace('\n', ' ')
+        payload = '{}|{}|{}'.format(ts_iso, safe_author, safe_text)
+        frame = '&&\n0101{}\nSPARE500{}\n!!'.format(well_id, payload)
+        try:
+            self.store.enqueue(frame.encode('utf-8'), time.time())
+            cli_print('[TEST] Comentario de prueba inyectado: well_id={} author={} text={}'.format(
+                well_id, safe_author, safe_text[:60]))
+            return True
+        except Exception as e:
+            cli_print('[TEST] Error inyectando: {}'.format(e))
+            return False
 
     def _try_extract_well_id(self, frame_bytes):
         """Extrae el item 0101 de una trama WITS y lo guarda si es nuevo/valido."""
@@ -3022,6 +3083,9 @@ class BridgeGUI(object):
         self._ec_install_btn = tk.Button(tab_ec, text='Instalar pymongo',
                                           command=self._on_ec_install_pymongo)
         self._ec_install_btn.grid(row=9, column=3, padx=4, pady=(8, 0), sticky='w')
+        self._ec_send_test_btn = tk.Button(tab_ec, text='Enviar comentario de prueba',
+                                            command=self._on_send_test_comment)
+        self._ec_send_test_btn.grid(row=10, column=0, columnspan=2, padx=4, pady=(4, 0), sticky='w')
 
         self._ec_widgets = [self._ec_host_entry, self._ec_port_entry,
                             self._ec_user_entry, self._ec_pass_entry,
@@ -3199,6 +3263,19 @@ class BridgeGUI(object):
                 w.configure(state=state)
             except Exception:
                 pass
+
+    def _on_send_test_comment(self):
+        """Inyecta un comentario de prueba local (boton en GUI)."""
+        if self.worker is None or not hasattr(self.worker, 'bridge'):
+            self._append_log('[TEST] Error: el bridge no esta corriendo. Primero inicia.\n')
+            return
+        text = 'Comentario de prueba desde GUI - {}'.format(
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        ok = self.worker.bridge.inject_test_comment(text, author='GUI-test')
+        if ok:
+            self._append_log('[TEST] Comentario inyectado en el backlog\n')
+        else:
+            self._append_log('[TEST] Fallo al inyectar\n')
 
     def _on_ec_install_pymongo(self):
         """Instala pymongo en un hilo separado para no bloquear la GUI."""
