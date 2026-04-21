@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.8.0'
+VERSION = '1.9.0'
 
 import socket
 import struct
@@ -1246,11 +1246,20 @@ class ExternalCommentsPoller(object):
         return iso
 
     def _ts_to_iso(self, ts_value):
-        """Convierte un valor ts de Mongo a ISO 8601 UTC."""
+        """Convierte un valor ts de Mongo a ISO 8601 UTC. Compat Python 2.7 y 3.x."""
         if isinstance(ts_value, datetime.datetime):
             if ts_value.tzinfo is None:
                 return ts_value.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-            return ts_value.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # tz-aware: convertir a UTC manualmente (datetime.timezone no existe en Py2.7)
+            try:
+                offset = ts_value.utcoffset()
+            except Exception:
+                offset = None
+            if offset is not None:
+                ts_utc_naive = ts_value.replace(tzinfo=None) - offset
+            else:
+                ts_utc_naive = ts_value.replace(tzinfo=None)
+            return ts_utc_naive.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         return str(ts_value)
 
     def _iso_to_datetime(self, ts_iso):
@@ -1285,8 +1294,14 @@ class ExternalCommentsPoller(object):
             ts_raw = doc.get(self.field_ts)
             text = doc.get(self.field_text)
             author = doc.get(self.field_author)
-            if ts_raw is None or not text:
-                return None  # invalido, ignorar
+            if ts_raw is None:
+                cli_print('[ExtComments] Doc sin campo {}, skip. Keys: {}'.format(
+                    self.field_ts, list(doc.keys())[:10]))
+                return None
+            if not text:
+                cli_print('[ExtComments] Doc sin campo {} o vacio, skip. Keys: {}'.format(
+                    self.field_text, list(doc.keys())[:10]))
+                return None
             # Obtener well_id (item 0101) detectado del stream WITS
             well_id = ''
             if self.db_getter:
@@ -1298,12 +1313,19 @@ class ExternalCommentsPoller(object):
                 well_id = self.mongo_cfg.get('db', '') or 'UNKNOWN'
             ts_iso = self._ts_to_iso(ts_raw)
             frame_bytes = self._build_wits_frame(well_id, ts_iso, text, author)
-            # Encolar en el mismo backlog que las tramas WITS; se entrega por el canal configurado
+            # Encolar en el mismo backlog que las tramas WITS
             self.store.enqueue(frame_bytes, time.time())
             self._published_count += 1
+            # Log del frame inyectado (truncado)
+            try:
+                frame_preview = frame_bytes.decode('utf-8', 'replace').replace('\n', ' | ')[:200]
+                cli_print('[ExtComments] Inyectado: {}'.format(frame_preview))
+            except Exception:
+                pass
             return ts_iso
         except Exception as e:
-            cli_print('[ExtComments] Error procesando doc: {}'.format(e))
+            cli_print('[ExtComments] Error procesando doc: {} (ts={}, text={})'.format(
+                e, repr(doc.get(self.field_ts))[:50], repr(doc.get(self.field_text))[:50]))
             return None
 
     def _run(self):
