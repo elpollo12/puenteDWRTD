@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.9.0'
+VERSION = '1.10.0'
 
 import socket
 import struct
@@ -168,116 +168,151 @@ def ensure_pymongo():
         rc2 if rc2 != 0 else rc, (out2 or out)[:400]))
 
 
-# ========== Autostart Windows (HKCU Registry Run key, sin admin) ==========
+# ========== Autostart Windows (Startup folder VBS, compat Win7/8/10/11) ==========
+# Mecanismo primario: archivo .vbs en
+#   %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\PuenteDWRTD.vbs
+# Compatible con Windows 7, 8, 10 y 11. No requiere admin.
+# Mas visible que HKCU Run en Task Manager > Startup tab.
+#
+# Ademas migramos (desinstalamos) cualquier entry previa en HKCU Run que hayan
+# creado versiones anteriores, para evitar doble arranque.
 
 AUTOSTART_APP_NAME = 'PuenteDWRTD'
 _AUTOSTART_REG_PATH = r'Software\Microsoft\Windows\CurrentVersion\Run'
 _AUTOSTART_APPROVED_PATH = r'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
 
-def _autostart_command():
-    """Construye el comando que se ejecuta al inicio de sesion."""
+
+def _autostart_pythonw_exe():
+    """Retorna la ruta a pythonw.exe si existe, sino a python.exe."""
     exe = sys.executable
     pythonw = os.path.join(os.path.dirname(exe), 'pythonw.exe')
     if os.path.exists(pythonw):
-        exe = pythonw
+        return pythonw
+    return exe
+
+
+def _autostart_vbs_path():
+    """Retorna la ruta al archivo .vbs en la Startup folder del usuario actual."""
+    if os.name != 'nt':
+        return None
+    appdata = os.environ.get('APPDATA')
+    if not appdata:
+        return None
+    startup_dir = os.path.join(appdata, 'Microsoft', 'Windows',
+                                'Start Menu', 'Programs', 'Startup')
+    return os.path.join(startup_dir, AUTOSTART_APP_NAME + '.vbs')
+
+
+def _autostart_vbs_content():
+    """Genera el contenido del .vbs launcher (arranca pythonw.exe con el script, sin ventana)."""
+    exe = _autostart_pythonw_exe()
     script = os.path.abspath(__file__)
-    return '"{}" "{}" --gui'.format(exe, script)
+    cwd = os.path.dirname(script)
+    # Escapar comillas dobles duplicandolas (sintaxis VBS)
+    exe_v = exe.replace('"', '""')
+    script_v = script.replace('"', '""')
+    cwd_v = cwd.replace('"', '""')
+    # Chr(34) = " (comilla doble) para evitar peleas de escape
+    return (
+        "' Autostart launcher generado por tcp_4guard.py\n"
+        "Set sh = CreateObject(\"WScript.Shell\")\n"
+        "sh.CurrentDirectory = \"{cwd}\"\n"
+        "sh.Run Chr(34) & \"{exe}\" & Chr(34) & \" \" & Chr(34) & \"{script}\" & Chr(34) & \" --gui\", 0, False\n"
+    ).format(cwd=cwd_v, exe=exe_v, script=script_v)
+
 
 def autostart_check():
-    """Verifica si la entrada Run existe y si no fue deshabilitada por el usuario.
-    Retorna {exists, enabled, error, command}."""
+    """Verifica si el .vbs existe y su contenido apunta al script actual.
+    Retorna {exists, enabled, error, path, content_ok}."""
     if os.name != 'nt':
-        return {'exists': False, 'enabled': False, 'error': 'solo Windows', 'command': None}
+        return {'exists': False, 'enabled': False, 'error': 'solo Windows',
+                'path': None, 'content_ok': False}
+    path = _autostart_vbs_path()
+    if not path:
+        return {'exists': False, 'enabled': False, 'error': 'APPDATA no disponible',
+                'path': None, 'content_ok': False}
+    if not os.path.exists(path):
+        return {'exists': False, 'enabled': False, 'error': None,
+                'path': path, 'content_ok': False}
     try:
-        import winreg
+        with open(path, 'r') as f:
+            content = f.read()
     except Exception as e:
-        return {'exists': False, 'enabled': False, 'error': str(e), 'command': None}
-    exists = False
-    command = None
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG_PATH, 0, winreg.KEY_READ) as k:
-            try:
-                command, _ = winreg.QueryValueEx(k, AUTOSTART_APP_NAME)
-                exists = True
-            except FileNotFoundError:
-                exists = False
-    except Exception as e:
-        return {'exists': False, 'enabled': False, 'error': str(e), 'command': None}
-    if not exists:
-        return {'exists': False, 'enabled': False, 'error': None, 'command': None}
-    # Revisar si Windows lo deshabilito via StartupApproved (Settings > Apps > Startup)
-    enabled = True
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_APPROVED_PATH, 0, winreg.KEY_READ) as k:
-            try:
-                val, _ = winreg.QueryValueEx(k, AUTOSTART_APP_NAME)
-                # val es bytes; primer byte: 02=enabled, 03=disabled
-                if isinstance(val, bytes) and len(val) > 0:
-                    enabled = (val[0] == 0x02)
-            except FileNotFoundError:
-                pass
-    except Exception:
-        pass
-    return {'exists': True, 'enabled': enabled, 'error': None, 'command': command}
+        return {'exists': True, 'enabled': False, 'error': str(e),
+                'path': path, 'content_ok': False}
+    # Validar que apunte al script actual
+    script = os.path.abspath(__file__)
+    content_ok = (script in content) or (script.replace('\\', '\\\\') in content)
+    return {'exists': True, 'enabled': content_ok, 'error': None,
+            'path': path, 'content_ok': content_ok}
+
 
 def autostart_install():
-    """Crea o sobrescribe la entrada en HKCU Run."""
+    """Crea o sobrescribe el .vbs en Startup folder. Tambien limpia el registry Run antiguo."""
     if os.name != 'nt':
         return (False, 'solo Windows')
+    path = _autostart_vbs_path()
+    if not path:
+        return (False, 'No se pudo determinar la Startup folder (APPDATA missing)')
     try:
-        import winreg
+        # Asegurar que el directorio Startup existe (usualmente si, pero por si acaso)
+        startup_dir = os.path.dirname(path)
+        if not os.path.exists(startup_dir):
+            try:
+                os.makedirs(startup_dir)
+            except Exception:
+                pass
+        content = _autostart_vbs_content()
+        with open(path, 'w') as f:
+            f.write(content)
+        # Migracion: remover entry vieja de HKCU Run si existe (para evitar doble arranque)
+        _autostart_registry_uninstall_silent()
+        return (True, 'Autostart instalado: {}'.format(path))
     except Exception as e:
-        return (False, str(e))
-    try:
-        cmd = _autostart_command()
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG_PATH, 0,
-                             winreg.KEY_SET_VALUE | winreg.KEY_READ) as k:
-            winreg.SetValueEx(k, AUTOSTART_APP_NAME, 0, winreg.REG_SZ, cmd)
-        return (True, 'Autostart configurado en HKCU\\Run como "{}"'.format(AUTOSTART_APP_NAME))
-    except Exception as e:
-        return (False, 'Error escribiendo registro: {}'.format(e))
+        return (False, 'Error escribiendo .vbs: {}'.format(e))
+
 
 def autostart_enable():
-    """Re-habilita la entrada si Windows la tenia marcada como deshabilitada."""
-    if os.name != 'nt':
-        return (False, 'solo Windows')
-    try:
-        import winreg
-    except Exception as e:
-        return (False, str(e))
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_APPROVED_PATH, 0,
-                             winreg.KEY_SET_VALUE | winreg.KEY_READ) as k:
-            # 02 00 00 00 00 00 00 00 00 00 00 00 = enabled
-            enabled_bytes = b'\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-            winreg.SetValueEx(k, AUTOSTART_APP_NAME, 0, winreg.REG_BINARY, enabled_bytes)
-        return (True, 'Autostart habilitado')
-    except FileNotFoundError:
-        # El key StartupApproved no existe todavia; no hace falta tocar nada
-        return (True, 'Autostart habilitado (no estaba bloqueado)')
-    except Exception as e:
-        return (False, 'Error: {}'.format(e))
+    """Compat: re-instala el .vbs (equivalente a habilitar)."""
+    return autostart_install()
+
 
 def autostart_uninstall():
-    """Elimina la entrada de autostart."""
+    """Elimina el .vbs y tambien limpia el registry Run antiguo."""
     if os.name != 'nt':
         return (False, 'solo Windows')
+    path = _autostart_vbs_path()
+    removed_vbs = False
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+            removed_vbs = True
+        except Exception as e:
+            return (False, 'Error eliminando .vbs: {}'.format(e))
+    # Limpiar tambien registry Run (por si habia entry antigua)
+    _autostart_registry_uninstall_silent()
+    if removed_vbs:
+        return (True, 'Autostart desinstalado (.vbs eliminado)')
+    return (True, 'No estaba instalado')
+
+
+def _autostart_registry_uninstall_silent():
+    """Remueve la entry vieja de HKCU Run (del mecanismo anterior). Best-effort silencioso."""
+    if os.name != 'nt':
+        return
     try:
         import winreg
-    except Exception as e:
-        return (False, str(e))
-    removed = False
+    except Exception:
+        return
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG_PATH, 0,
                              winreg.KEY_SET_VALUE) as k:
             try:
                 winreg.DeleteValue(k, AUTOSTART_APP_NAME)
-                removed = True
             except FileNotFoundError:
                 pass
-    except Exception as e:
-        return (False, 'Error: {}'.format(e))
-    # Tambien limpiar StartupApproved si existe
+    except Exception:
+        pass
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_APPROVED_PATH, 0,
                              winreg.KEY_SET_VALUE) as k:
@@ -287,29 +322,26 @@ def autostart_uninstall():
                 pass
     except Exception:
         pass
-    if removed:
-        return (True, 'Autostart desinstalado')
-    return (True, 'No estaba instalado')
+
 
 def ensure_autostart():
-    """Crea si no existe, o asegura que este habilitada. Idempotente."""
+    """Crea el .vbs si no existe, o lo regenera si el contenido cambio.
+    Tambien limpia la entry vieja de HKCU Run (migracion). Idempotente."""
     if os.name != 'nt':
         return
     try:
         status = autostart_check()
-        # Si existe y el comando cambio (por ej. ruta del script cambio), actualizarlo
-        desired_cmd = _autostart_command()
         if not status['exists']:
             ok, msg = autostart_install()
             print('[Autostart] ' + msg)
-        elif status.get('command') != desired_cmd:
+        elif not status['content_ok']:
+            # El .vbs existe pero apunta a otro script (ej: path movido) - regenerar
             ok, msg = autostart_install()
-            print('[Autostart] Comando actualizado. ' + msg)
-        elif not status['enabled']:
-            ok, msg = autostart_enable()
-            print('[Autostart] ' + msg)
+            print('[Autostart] Regenerado: ' + msg)
         else:
-            print('[Autostart] Ya activo como "{}"'.format(AUTOSTART_APP_NAME))
+            print('[Autostart] Ya activo: {}'.format(status.get('path')))
+        # Migracion silenciosa: limpiar HKCU Run aunque el .vbs ya este
+        _autostart_registry_uninstall_silent()
     except Exception as e:
         print('[Autostart] Error: {}'.format(e))
 
@@ -3257,10 +3289,11 @@ class BridgeGUI(object):
                 self._autostart_status_lbl.configure(text=st['error'], fg='gray50')
             elif not st['exists']:
                 self._autostart_status_lbl.configure(text='No instalado', fg='red')
-            elif not st['enabled']:
-                self._autostart_status_lbl.configure(text='Instalado pero deshabilitado', fg='orange')
+            elif not st.get('content_ok', True):
+                self._autostart_status_lbl.configure(
+                    text='VBS existe pero apunta a otro path', fg='orange')
             else:
-                self._autostart_status_lbl.configure(text='Activo', fg='green')
+                self._autostart_status_lbl.configure(text='Activo (.vbs)', fg='green')
         except Exception as e:
             try:
                 self._autostart_status_lbl.configure(text='Error: {}'.format(e), fg='gray50')
