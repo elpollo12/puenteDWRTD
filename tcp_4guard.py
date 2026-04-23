@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.1'
+VERSION = '1.11.2'
 
 import socket
 import struct
@@ -300,16 +300,21 @@ def _autostart_registry_uninstall_silent():
     """Remueve la entry vieja de HKCU Run (del mecanismo anterior). Best-effort silencioso."""
     if os.name != 'nt':
         return
+    # v1.11.2: compat Py2 (_winreg) y Py3 (winreg). FileNotFoundError es Py3-only,
+    # uso OSError que cubre WindowsError en Py2 y FileNotFoundError en Py3.
     try:
-        import winreg
+        import _winreg as winreg  # Python 2
     except Exception:
-        return
+        try:
+            import winreg  # Python 3
+        except Exception:
+            return
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG_PATH, 0,
                              winreg.KEY_SET_VALUE) as k:
             try:
                 winreg.DeleteValue(k, AUTOSTART_APP_NAME)
-            except FileNotFoundError:
+            except OSError:
                 pass
     except Exception:
         pass
@@ -318,7 +323,7 @@ def _autostart_registry_uninstall_silent():
                              winreg.KEY_SET_VALUE) as k:
             try:
                 winreg.DeleteValue(k, AUTOSTART_APP_NAME)
-            except FileNotFoundError:
+            except OSError:
                 pass
     except Exception:
         pass
