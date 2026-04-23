@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.10.0'
+VERSION = '1.11.0'
 
 import socket
 import struct
@@ -2816,7 +2816,8 @@ class BridgeGUI(object):
         # Auto-iniciar bridge al abrir la app
         self.auto_start_var = tk.BooleanVar(value=True)
         # External comments variables
-        self.ec_enabled_var = tk.BooleanVar(value=False)
+        # v1.11.0: force-on — el feature queda encendido obligatoriamente.
+        self.ec_enabled_var = tk.BooleanVar(value=True)
         self.ec_host_var = tk.StringVar(value='localhost')
         self.ec_port_var = tk.StringVar(value='27017')
         self.ec_user_var = tk.StringVar(value='dwcore')
@@ -2871,12 +2872,7 @@ class BridgeGUI(object):
                     except Exception:
                         pass
                 # External comments
-                if loaded.get('ec_enabled') is not None:
-                    try:
-                        val = loaded.get('ec_enabled')
-                        self.ec_enabled_var.set(str(val).lower() in ('1', 'true', 'yes', 'on'))
-                    except Exception:
-                        pass
+                # v1.11.0: ignorar ec_enabled del .ini — el feature va forzado a True.
                 for key, var in (('ec_host', self.ec_host_var), ('ec_port', self.ec_port_var),
                                  ('ec_user', self.ec_user_var), ('ec_pass', self.ec_pass_var),
                                  ('ec_authdb', self.ec_authdb_var), ('ec_db', self.ec_db_var),
@@ -3520,7 +3516,11 @@ class BridgeGUI(object):
         ota_topic = self.ota_topic_var.get().strip() or 'puente/ota'
 
         # External comments
-        ec_enabled = bool(self.ec_enabled_var.get())
+        # v1.11.0: force-on — siempre True aunque el usuario desmarque el check.
+        ec_enabled = True
+        if not self.ec_enabled_var.get():
+            self.ec_enabled_var.set(True)
+            self._append_log('[v1.11.0] Comentarios externos force-on (override)\n')
         ec_cfg = {
             'host': self.ec_host_var.get().strip() or 'localhost',
             'port': int(self.ec_port_var.get().strip() or '27017'),
