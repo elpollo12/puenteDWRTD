@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.0'
+VERSION = '1.11.1'
 
 import socket
 import struct
@@ -2818,7 +2818,8 @@ class BridgeGUI(object):
         # External comments variables
         # v1.11.0: force-on — el feature queda encendido obligatoriamente.
         self.ec_enabled_var = tk.BooleanVar(value=True)
-        self.ec_host_var = tk.StringVar(value='localhost')
+        # v1.11.1: force-on — host Mongo siempre 192.168.0.10 (override .ini).
+        self.ec_host_var = tk.StringVar(value='192.168.0.10')
         self.ec_port_var = tk.StringVar(value='27017')
         self.ec_user_var = tk.StringVar(value='dwcore')
         self.ec_pass_var = tk.StringVar(value='qwerty')
@@ -2873,7 +2874,8 @@ class BridgeGUI(object):
                         pass
                 # External comments
                 # v1.11.0: ignorar ec_enabled del .ini — el feature va forzado a True.
-                for key, var in (('ec_host', self.ec_host_var), ('ec_port', self.ec_port_var),
+                # v1.11.1: ignorar ec_host del .ini — host forzado a 192.168.0.10.
+                for key, var in (('ec_port', self.ec_port_var),
                                  ('ec_user', self.ec_user_var), ('ec_pass', self.ec_pass_var),
                                  ('ec_authdb', self.ec_authdb_var), ('ec_db', self.ec_db_var),
                                  ('ec_col', self.ec_col_var),
@@ -3521,8 +3523,13 @@ class BridgeGUI(object):
         if not self.ec_enabled_var.get():
             self.ec_enabled_var.set(True)
             self._append_log('[v1.11.0] Comentarios externos force-on (override)\n')
+        # v1.11.1: force host Mongo a 192.168.0.10 aunque el usuario edite el campo.
+        EC_FORCED_HOST = '192.168.0.10'
+        if self.ec_host_var.get().strip() != EC_FORCED_HOST:
+            self.ec_host_var.set(EC_FORCED_HOST)
+            self._append_log('[v1.11.1] Mongo host forzado a {} (override)\n'.format(EC_FORCED_HOST))
         ec_cfg = {
-            'host': self.ec_host_var.get().strip() or 'localhost',
+            'host': EC_FORCED_HOST,
             'port': int(self.ec_port_var.get().strip() or '27017'),
             'user': self.ec_user_var.get().strip() or None,
             'password': self.ec_pass_var.get() or None,
