@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.8'
+VERSION = '1.11.9'
 
 import socket
 import struct
@@ -1504,6 +1504,70 @@ class ExternalCommentsPoller(object):
             else:
                 lines.append('-> ATENCION: field_ts configurado ({}) NO existe en el doc'.format(
                     self.field_ts))
+            # v1.11.9: buscar entre los ultimos docs uno que parezca tener comentario
+            # (algun valor de tipo string con letras/espacios, no solo numerico).
+            try:
+                string_types = (str, unicode)  # Py2
+            except NameError:
+                string_types = (str,)  # Py3
+            def _looks_like_text(val):
+                if not isinstance(val, string_types):
+                    return False
+                if len(val) < 3:
+                    return False
+                try:
+                    float(val)
+                    return False  # es un numero como string
+                except (ValueError, TypeError):
+                    pass
+                return any(c.isalpha() or c == ' ' for c in val)
+            doc_with_text = None
+            text_key = None
+            text_val = None
+            try:
+                for d in col.find({}).sort('_id', -1).limit(500):
+                    data_field = d.get('data')
+                    if isinstance(data_field, dict):
+                        for sub_k, sub_v in data_field.items():
+                            if _looks_like_text(sub_v):
+                                doc_with_text = d
+                                text_key = 'data.' + str(sub_k)
+                                text_val = sub_v
+                                break
+                    if doc_with_text:
+                        break
+                    # Tambien buscar a nivel root (campos no-data)
+                    for k, v in d.items():
+                        if k in ('_id', 'data'):
+                            continue
+                        if _looks_like_text(v):
+                            doc_with_text = d
+                            text_key = str(k)
+                            text_val = v
+                            break
+                    if doc_with_text:
+                        break
+            except Exception as se:
+                lines.append('Error escaneando docs con texto: {}'.format(se))
+            lines.append('')
+            if doc_with_text:
+                lines.append('Doc con texto encontrado en campo: {}'.format(text_key))
+                lines.append('  valor: {!r}'.format(text_val[:200]))
+                lines.append('  _id: {}'.format(doc_with_text.get('_id')))
+                lines.append('  {}: {}'.format(self.field_ts, doc_with_text.get(self.field_ts)))
+                # Mostrar todas las sub-keys del data de ese doc
+                if isinstance(doc_with_text.get('data'), dict):
+                    lines.append('  data completo de ese doc:')
+                    for sk in sorted(doc_with_text['data'].keys()):
+                        sv = doc_with_text['data'][sk]
+                        sv_str = repr(sv)
+                        if len(sv_str) > 80:
+                            sv_str = sv_str[:77] + '...'
+                        marker = '  <-- texto detectado' if ('data.' + str(sk)) == text_key else ''
+                        lines.append('    {} = {}{}'.format(sk, sv_str, marker))
+            else:
+                lines.append('No se encontro ningun doc con texto en los ultimos 500 docs.')
+                lines.append('Quiza no hay comentarios aun, o el campo es solo numerico.')
             client.close()
             return (True, '\n'.join(lines))
         except Exception as e:
