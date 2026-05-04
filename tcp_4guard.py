@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.7'
+VERSION = '1.11.8'
 
 import socket
 import struct
@@ -1483,10 +1483,21 @@ class ExternalCommentsPoller(object):
                 return (True, '\n'.join(lines))
             lines.append('Campos del doc mas reciente:')
             for k in sample.keys():
-                v_str = repr(sample[k])
-                if len(v_str) > 80:
-                    v_str = v_str[:77] + '...'
-                lines.append('  {} = {}'.format(k, v_str))
+                v = sample[k]
+                # v1.11.8: expandir dicts internos (ej: 'data' con keys WITS)
+                # para identificar campos como SPARE500 que pudieran tener comentarios.
+                if isinstance(v, dict):
+                    lines.append('  {} (dict, {} keys):'.format(k, len(v)))
+                    for sub_k in sorted(v.keys()):
+                        sub_v_str = repr(v[sub_k])
+                        if len(sub_v_str) > 60:
+                            sub_v_str = sub_v_str[:57] + '...'
+                        lines.append('    {} = {}'.format(sub_k, sub_v_str))
+                else:
+                    v_str = repr(v)
+                    if len(v_str) > 80:
+                        v_str = v_str[:77] + '...'
+                    lines.append('  {} = {}'.format(k, v_str))
             if self.field_ts in sample:
                 lines.append('-> field_ts configurado ({}) existe. Valor: {}'.format(
                     self.field_ts, sample.get(self.field_ts)))
