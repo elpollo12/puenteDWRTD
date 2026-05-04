@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.6'
+VERSION = '1.11.7'
 
 import socket
 import struct
@@ -3199,9 +3199,17 @@ class BridgeGUI(object):
     def _build_log(self):
         frm = tk.Frame(self.root, padx=8, pady=4)
         frm.pack(fill='both', expand=True)
-        self.txt = tk.Text(frm, height=18, wrap='word')
-        self.txt.pack(fill='both', expand=True)
+        # v1.11.7: scrollbar vertical + trim automatico de lineas viejas.
+        scrollbar = tk.Scrollbar(frm)
+        scrollbar.pack(side='right', fill='y')
+        self.txt = tk.Text(frm, height=18, wrap='word',
+                            yscrollcommand=scrollbar.set)
+        self.txt.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=self.txt.yview)
         self.txt.configure(state='disabled')
+        # Limite de lineas en el log para evitar consumo de memoria.
+        self._log_max_lines = 2000
+        self._log_trim_chunk = 500  # lineas a borrar de a cuando supera max
 
     def _build_buttons(self):
         frm = tk.Frame(self.root, padx=8, pady=8)
@@ -3424,9 +3432,25 @@ class BridgeGUI(object):
             pass
 
     def _append_log(self, text):
+        # v1.11.7: solo auto-scroll si el user ya esta al final, asi no se
+        # interrumpe si esta scrolleando hacia arriba leyendo logs viejos.
+        try:
+            yview_bottom = self.txt.yview()[1]
+        except Exception:
+            yview_bottom = 1.0
+        was_at_bottom = yview_bottom >= 0.999
         self.txt.configure(state='normal')
         self.txt.insert('end', text)
-        self.txt.see('end')
+        # Trim si supera el limite (rebanando de a chunks para no hacerlo en cada linea).
+        try:
+            line_count = int(self.txt.index('end-1c').split('.')[0])
+            if line_count > self._log_max_lines:
+                cut_to = line_count - (self._log_max_lines - self._log_trim_chunk)
+                self.txt.delete('1.0', '{}.0'.format(cut_to))
+        except Exception:
+            pass
+        if was_at_bottom:
+            self.txt.see('end')
         self.txt.configure(state='disabled')
 
     def _poll_logs(self):
