@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.2'
+VERSION = '1.11.3'
 
 import socket
 import struct
@@ -1418,7 +1418,8 @@ class ExternalCommentsPoller(object):
                         len(docs), injected))
             except Exception as e:
                 self._last_error = str(e)
-                cli_print('[ExtComments] Error en query Mongo: {}'.format(e))
+                cli_print('[ExtComments] Error en tick ({}): {}'.format(
+                    type(e).__name__, e))
                 # Romper conexion para reconectar
                 try:
                     if self._client:
@@ -2554,13 +2555,13 @@ class DataStore(object):
             return val
 
     def set_last_ts(self, source_key, ts_iso):
-        """Actualiza (upsert) el last_ts de una fuente."""
+        """Actualiza (upsert) el last_ts de una fuente.
+        v1.11.3: usar INSERT OR REPLACE (compat SQLite < 3.24, ej Python 2.7 Windows)."""
         now_iso = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         with self._lock:
             c = self._conn.cursor()
-            c.execute('''INSERT INTO poller_state (source_key, last_ts, updated_at)
-                         VALUES (?, ?, ?)
-                         ON CONFLICT(source_key) DO UPDATE SET last_ts=excluded.last_ts, updated_at=excluded.updated_at''',
+            c.execute('''INSERT OR REPLACE INTO poller_state (source_key, last_ts, updated_at)
+                         VALUES (?, ?, ?)''',
                       (source_key, ts_iso, now_iso))
             self._conn.commit()
 
