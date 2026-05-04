@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.4'
+VERSION = '1.11.5'
 
 import socket
 import struct
@@ -1445,7 +1445,8 @@ class ExternalCommentsPoller(object):
         }
 
     def test_connection(self):
-        """Prueba la conexion Mongo y retorna info. Usado por GUI."""
+        """Prueba la conexion Mongo y retorna info + estructura del doc mas reciente.
+        v1.11.5: muestra los campos del doc para diagnostico."""
         if pymongo is None:
             return (False, 'pymongo no instalado')
         try:
@@ -1455,11 +1456,25 @@ class ExternalCommentsPoller(object):
             db = client[self.mongo_cfg.get('db', '')]
             col = db[self.mongo_cfg.get('collection', '')]
             n = col.count_documents({}, limit=1)
-            sample = col.find_one({}, sort=[(self.field_ts, -1)])
+            # Doc mas reciente por orden de insercion (_id), independiente de field_ts.
+            sample = col.find_one({}, sort=[('_id', -1)])
             client.close()
-            msg = 'OK. Coleccion tiene al menos {} doc. Ultimo ts: {}'.format(
-                n, sample.get(self.field_ts) if sample else 'N/A')
-            return (True, msg)
+            if not sample:
+                return (True, 'OK. Coleccion vacia (0 docs).')
+            lines = ['OK. Coleccion tiene al menos {} doc.'.format(n)]
+            lines.append('Campos del doc mas reciente:')
+            for k in sample.keys():
+                v_str = repr(sample[k])
+                if len(v_str) > 80:
+                    v_str = v_str[:77] + '...'
+                lines.append('  {} = {}'.format(k, v_str))
+            if self.field_ts in sample:
+                lines.append('-> field_ts configurado ({}) existe. Valor: {}'.format(
+                    self.field_ts, sample.get(self.field_ts)))
+            else:
+                lines.append('-> ATENCION: field_ts configurado ({}) NO existe en el doc'.format(
+                    self.field_ts))
+            return (True, '\n'.join(lines))
         except Exception as e:
             return (False, str(e))
 
