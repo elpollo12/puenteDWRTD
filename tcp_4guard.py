@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.3'
+VERSION = '1.11.4'
 
 import socket
 import struct
@@ -2832,7 +2832,8 @@ class BridgeGUI(object):
         self.ec_authdb_var = tk.StringVar(value='admin')
         self.ec_db_var = tk.StringVar(value='')
         self.ec_col_var = tk.StringVar(value='timedata')
-        self.ec_field_ts_var = tk.StringVar(value='ts')
+        # v1.11.4: force-on — campo timestamp Mongo siempre 'createdAt' (default Mongoose).
+        self.ec_field_ts_var = tk.StringVar(value='createdAt')
         self.ec_field_text_var = tk.StringVar(value='text')
         self.ec_field_author_var = tk.StringVar(value='author')
         self.ec_interval_var = tk.StringVar(value='5')
@@ -2881,11 +2882,11 @@ class BridgeGUI(object):
                 # External comments
                 # v1.11.0: ignorar ec_enabled del .ini — el feature va forzado a True.
                 # v1.11.1: ignorar ec_host del .ini — host forzado a 192.168.0.10.
+                # v1.11.4: ignorar ec_field_ts del .ini — campo forzado a 'createdAt'.
                 for key, var in (('ec_port', self.ec_port_var),
                                  ('ec_user', self.ec_user_var), ('ec_pass', self.ec_pass_var),
                                  ('ec_authdb', self.ec_authdb_var), ('ec_db', self.ec_db_var),
                                  ('ec_col', self.ec_col_var),
-                                 ('ec_field_ts', self.ec_field_ts_var),
                                  ('ec_field_text', self.ec_field_text_var),
                                  ('ec_field_author', self.ec_field_author_var),
                                  ('ec_interval', self.ec_interval_var),
@@ -3534,6 +3535,11 @@ class BridgeGUI(object):
         if self.ec_host_var.get().strip() != EC_FORCED_HOST:
             self.ec_host_var.set(EC_FORCED_HOST)
             self._append_log('[v1.11.1] Mongo host forzado a {} (override)\n'.format(EC_FORCED_HOST))
+        # v1.11.4: force campo ts a 'createdAt' (default Mongoose).
+        EC_FORCED_FIELD_TS = 'createdAt'
+        if self.ec_field_ts_var.get().strip() != EC_FORCED_FIELD_TS:
+            self.ec_field_ts_var.set(EC_FORCED_FIELD_TS)
+            self._append_log('[v1.11.4] Campo ts Mongo forzado a {} (override)\n'.format(EC_FORCED_FIELD_TS))
         ec_cfg = {
             'host': EC_FORCED_HOST,
             'port': int(self.ec_port_var.get().strip() or '27017'),
@@ -3542,7 +3548,7 @@ class BridgeGUI(object):
             'authdb': self.ec_authdb_var.get().strip() or 'admin',
             'db': self.ec_db_var.get().strip(),
             'collection': self.ec_col_var.get().strip(),
-            'field_ts': self.ec_field_ts_var.get().strip() or 'ts',
+            'field_ts': EC_FORCED_FIELD_TS,
             'field_text': self.ec_field_text_var.get().strip() or 'text',
             'field_author': self.ec_field_author_var.get().strip() or 'author',
             'interval': float(self.ec_interval_var.get().strip() or '5'),
