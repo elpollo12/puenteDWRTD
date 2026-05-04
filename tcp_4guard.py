@@ -20,7 +20,7 @@ Modos de uso:
 Dependencia MQTT (opcional): pip install paho-mqtt
 """
 
-VERSION = '1.11.5'
+VERSION = '1.11.6'
 
 import socket
 import struct
@@ -1446,22 +1446,41 @@ class ExternalCommentsPoller(object):
 
     def test_connection(self):
         """Prueba la conexion Mongo y retorna info + estructura del doc mas reciente.
-        v1.11.5: muestra los campos del doc para diagnostico."""
+        v1.11.5: muestra los campos del doc para diagnostico.
+        v1.11.6: lista todas las colecciones de la DB para detectar la correcta."""
         if pymongo is None:
             return (False, 'pymongo no instalado')
         try:
             uri = self._build_mongo_uri()
             client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=3000)
             client.admin.command('ping')
-            db = client[self.mongo_cfg.get('db', '')]
-            col = db[self.mongo_cfg.get('collection', '')]
+            db_name = self.mongo_cfg.get('db', '')
+            db = client[db_name]
+            col_name = self.mongo_cfg.get('collection', '')
+            lines = ['OK. Conectado a Mongo.']
+            # Listar todas las colecciones de la DB con su count
+            try:
+                all_cols = sorted(db.list_collection_names())
+                lines.append('Colecciones en DB "{}":'.format(db_name))
+                for cn in all_cols:
+                    try:
+                        cn_count = db[cn].estimated_document_count()
+                    except Exception:
+                        cn_count = '?'
+                    marker = ' <-- configurada' if cn == col_name else ''
+                    lines.append('  - {} ({} docs){}'.format(cn, cn_count, marker))
+            except Exception as le:
+                lines.append('No pudo listar colecciones: {}'.format(le))
+            # Detalle de la coleccion configurada
+            col = db[col_name]
             n = col.count_documents({}, limit=1)
-            # Doc mas reciente por orden de insercion (_id), independiente de field_ts.
             sample = col.find_one({}, sort=[('_id', -1)])
-            client.close()
+            lines.append('')
+            lines.append('Coleccion configurada "{}": al menos {} doc.'.format(col_name, n))
             if not sample:
-                return (True, 'OK. Coleccion vacia (0 docs).')
-            lines = ['OK. Coleccion tiene al menos {} doc.'.format(n)]
+                lines.append('(coleccion vacia)')
+                client.close()
+                return (True, '\n'.join(lines))
             lines.append('Campos del doc mas reciente:')
             for k in sample.keys():
                 v_str = repr(sample[k])
@@ -1474,6 +1493,7 @@ class ExternalCommentsPoller(object):
             else:
                 lines.append('-> ATENCION: field_ts configurado ({}) NO existe en el doc'.format(
                     self.field_ts))
+            client.close()
             return (True, '\n'.join(lines))
         except Exception as e:
             return (False, str(e))
